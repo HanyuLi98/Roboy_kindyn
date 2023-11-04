@@ -1,0 +1,6 @@
+<library path="lib/libCableLengthController">
+    <class name="cardsflow/kindyn/CableLengthController" 
+           base_class_type="controller_interface::ControllerInterface">
+        <description>This is a cardsflow cable length controller</description>
+    </class>
+</library>
