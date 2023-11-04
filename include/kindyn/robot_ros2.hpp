@@ -170,9 +170,10 @@ namespace cardsflow {
 
             // ros::ServiceServer ik_srv, ik_two_frames_srv, fk_srv, freeze_srv; ??
             //rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_srv, ik_two_frames_srv, fk_srv, freeze_srv;
-            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_srv;
-            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_two_frames_srv;
-            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr fk_srv;
+            //vrpuppet
+            rclcpp::Service<roboy_middleware_msgs::InverseKinematics>::SharedPtr ik_srv;
+            rclcpp::Service<roboy_middleware_msgs::InverseKinematicsMultipleFrames>::SharedPtr ik_two_frames_srv;
+            rclcpp::Service<roboy_middleware_msgs::ForwardKinematics>::SharedPtr fk_srv;
             rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr freeze_srv;
             string topic_root;
 

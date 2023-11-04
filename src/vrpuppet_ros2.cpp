@@ -3,24 +3,39 @@
 using namespace cardsflow::vrpuppet;
 
 Robot::Robot() {
-    if (!ros::isInitialized()) {
-        int argc = 0;
-        char **argv = NULL;
-        ros::init(argc, argv, "CARDSflow robot", ros::init_options::NoSigintHandler);
-    }
-    nh = ros::NodeHandlePtr(new ros::NodeHandle);
-    spinner.reset(new ros::AsyncSpinner(0));
-    spinner->start();
-    robot_state_pub = nh->advertise<geometry_msgs::PoseStamped>("/robot_state", 1);
-    tendon_state_pub = nh->advertise<roboy_simulation_msgs::Tendon>("/tendon_state", 1);
+    // if (!ros::isInitialized()) {
+    //     int argc = 0;
+    //     char **argv = NULL;
+    //     ros::init(argc, argv, "CARDSflow robot", ros::init_options::NoSigintHandler);
+    // }
+    // nh = ros::NodeHandlePtr(new ros::NodeHandle);
+    // spinner.reset(new ros::AsyncSpinner(0));
+    // spinner->start();
 
-    joint_state_pub = nh->advertise<roboy_simulation_msgs::JointState>("/rviz_joint_states", 1);
-    cardsflow_joint_states_pub = nh->advertise<sensor_msgs::JointState>("/cardsflow_joint_states", 1);
-    robot_state_target_pub = nh->advertise<geometry_msgs::PoseStamped>("/robot_state_target", 1);
-    tendon_state_target_pub = nh->advertise<roboy_simulation_msgs::Tendon>("/tendon_state_target", 1);
-    joint_state_target_pub = nh->advertise<roboy_simulation_msgs::JointState>("/joint_state_target", 1);
+    rclcpp::init(0, nullptr);
+    node_ = std::make_shared<rclcpp::Node>("CARDSflow_robot");
+
+    // robot_state_pub = nh->advertise<geometry_msgs::PoseStamped>("/robot_state", 1);
+    // tendon_state_pub = nh->advertise<roboy_simulation_msgs::Tendon>("/tendon_state", 1);
+    // joint_state_pub = nh->advertise<roboy_simulation_msgs::JointState>("/rviz_joint_states", 1);
+    robot_state_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/robot_state", 1);
+    tendon_state_pub = node_->create_publisher<roboy_simulation_msgs::msg::Tendon>("/tendon_state", 1);
+    joint_state_pub = node_->create_publisher<roboy_simulation_msgs::msg::JointState>("/rviz_joint_states", 1);
+
+    // cardsflow_joint_states_pub = nh->advertise<sensor_msgs::JointState>("/cardsflow_joint_states", 1);
+    // robot_state_target_pub = nh->advertise<geometry_msgs::PoseStamped>("/robot_state_target", 1);
+    // tendon_state_target_pub = nh->advertise<roboy_simulation_msgs::Tendon>("/tendon_state_target", 1);
+    // joint_state_target_pub = nh->advertise<roboy_simulation_msgs::JointState>("/joint_state_target", 1);
+    cardsflow_joint_states_pub = node_->create_publisher<sensor_msgs::msg::JointState>("/cardsflow_joint_states", 1);
+    robot_state_target_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>("/robot_state_target", 1);
+    tendon_state_target_pub = node_->create_publisher<roboy_simulation_msgs::msg::Tendon>("/tendon_state_target", 1);
+    joint_state_target_pub = node_->create_publisher<roboy_simulation_msgs::msg::JointState>("/joint_state_target", 1);
+
+    // fmt = Eigen::IOFormat(4, 0, " ", ";\n", "", "", "[", "]");
+    // nh->setParam("vr_puppet",true);
     fmt = Eigen::IOFormat(4, 0, " ", ";\n", "", "", "[", "]");
-    nh->setParam("vr_puppet",true);
+    node_->declare_parameter<bool>("vr_puppet", true);
+    
 }
 
 Robot::~Robot() {
@@ -44,7 +59,7 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
         ok = mdlLoader.loadReducedModelFromFile(urdf_file_path, joint_names_ordered);
 
     if (!ok) {
-        ROS_FATAL_STREAM("KinDynComputationsWithEigen: impossible to load model from " << urdf_file_path);
+        RCLCPP_FATAL_STREAM(rclcpp::get_logger(),"KinDynComputationsWithEigen: impossible to load model from " << urdf_file_path);
         return;
     }
 
@@ -52,14 +67,14 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     ok = kinDynComp.loadRobotModel(mdlLoader.model());
 
     if (!ok) {
-        ROS_FATAL_STREAM(
+        RCLCPP_FATAL_STREAM(rclcpp::get_logger(),
                 "KinDynComputationsWithEigen: impossible to load the following model in a KinDynComputations class:"
                         << std::endl
                         << mdlLoader.model().toString());
         return;
     }
 
-    ROS_INFO_STREAM(kinDynComp.getDescriptionOfDegreesOfFreedom());
+    RCLCPP_INFO_STREAM(rclcpp::get_logger(),kinDynComp.getDescriptionOfDegreesOfFreedom());
 
     kinDynCompTarget.loadRobotModel(mdlLoader.model());
 
@@ -70,12 +85,12 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     number_of_links = model.getNrOfLinks();
 
     if (!parseViapoints(viapoints_file_path, cables)) {
-        ROS_FATAL("something went wrong parsing the viapoints");
+        RCLCPP_FATAL_STREAM(rclcpp::get_logger(),"something went wrong parsing the viapoints");
         return;
     }
     number_of_cables = cables.size();
 
-    ROS_INFO_STREAM(
+    RCLCPP_INFO_STREAM(rclcpp::get_logger(),
             "robot:\ndofs: " << number_of_dofs << "\njoints: " << number_of_joints << "\nlinks: " << number_of_links
                              << "\nnumber_of_cables: " << number_of_cables);
 
@@ -84,7 +99,7 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     for (int link = 0; link < number_of_links; link++) {
         string link_name = model.getLinkName(link);
         link_names.push_back(link_name);
-        ROS_INFO_STREAM(link_name);
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),link_name);
         link_index[link_name] = link;
     }
     for (int joint = 0; joint < number_of_dofs; joint++) {
@@ -94,7 +109,7 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
         joint_names.push_back(joint_name);
         VectorXd axis = iDynTree::toEigen(s);
         joint_axis.push_back(axis);
-        ROS_INFO_STREAM(joint_name << " " << axis.transpose().format(fmt));
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),joint_name << " " << axis.transpose().format(fmt));
         joint_index[joint_name] = joint;
     }
 
@@ -167,7 +182,7 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     motor_state.resize(number_of_cables);
     // ros control
     for (int joint = 0; joint < number_of_dofs; joint++) {
-        ROS_INFO("initializing controllers for joint %d %s", joint, joint_names[joint].c_str());
+        RCLCPP_INFO(rclcpp::get_logger(),"initializing controllers for joint %d %s", joint, joint_names[joint].c_str());
         joint_state[joint][0] = 0;
         joint_state[joint][1] = 0;
         q_min[joint] = model.getJoint(joint)->getMinPosLimit(0);
@@ -225,8 +240,8 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     qp_solver.setPrintLevel(static_cast<PrintLevel>(qp_print_level));
 
     double min_force, max_force;
-    nh->getParam("min_force", min_force);
-    nh->getParam("max_force", max_force);
+    node_->get_parameter("min_force", min_force);
+    node_->get_parameter("max_force", max_force);
 
     f_min = VectorXd::Ones(number_of_cables);
     f_max = VectorXd::Ones(number_of_cables);
@@ -236,22 +251,22 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
 
     try {
         last_visualization =
-                ros::Time::now() - ros::Duration(10); // triggers immediate visualization in first iteratiom
+                rclcpp::Clock().now() - rclcpp::Duration(10); // triggers immediate visualization in first iteratiom
     }
     catch(std::runtime_error& ex) {
-        ROS_ERROR("Exception: [%s]", ex.what());
+        RCLCPP_ERROR(rclcpp::get_logger(),"Exception: [%s]", ex.what());
     }
 
     int k=0;
-    nh->getParam("endeffectors", endeffectors);
+    node_->get_parameter("endeffectors", endeffectors);
     endeffector_dof_offset.push_back(0);
     Ld.resize(endeffectors.size());
     for (string ef:endeffectors) {
-        ROS_INFO_STREAM("configuring endeffector " << ef);
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),"configuring endeffector " << ef);
         vector<string> ik_joints;
-        nh->getParam((ef + "/joints"), ik_joints);
+        node_->get_parameter((ef + "/joints"), ik_joints);
         if (ik_joints.empty()) {
-            ROS_WARN(
+            RCLCPP_WARN(rclcpp::get_logger(),
                     "endeffector %s has no joints defined, check your endeffector.yaml or parameter server.  skipping...",
                     ef.c_str());
             continue;
@@ -261,9 +276,9 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
         if(k>0)
             endeffector_dof_offset.push_back(endeffector_dof_offset[k-1]+endeffector_number_of_dofs[k-1]);
         string base_link;
-        nh->getParam((ef + "/base_link"), base_link);
+        node_->get_parameter((ef + "/base_link"), base_link);
         if (base_link.empty()) {
-            ROS_WARN(
+            RCLCPP_WARN(rclcpp::get_logger(),
                     "endeffector %s has no base_link defined, check your endeffector.yaml or parameter server. skipping...",
                     ef.c_str());
             continue;
@@ -273,14 +288,14 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
         iDynTree::ModelLoader mdlLoaderIK;
         bool ok = mdlLoaderIK.loadReducedModelFromFile(urdf_file_path, ik_joints);
         if (!ok) {
-            ROS_FATAL_STREAM("Oh no!: impossible to load model from " << urdf_file_path);
+            RCLCPP_FATAL_STREAM(rclcpp::get_logger(),"Oh no!: impossible to load model from " << urdf_file_path);
             return;
         }
 
         // Create a KinDynComputations class from the model
         ok = ik_models[ef].loadRobotModel(mdlLoaderIK.model());
         if (!ok) {
-            ROS_FATAL_STREAM(
+            RCLCPP_FATAL_STREAM(rclcpp::get_logger(),
                     "Oh no!: impossible to load the following model in a KinDynComputations class:"
                             << std::endl
                             << mdlLoader.model().toString());
@@ -291,14 +306,19 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
 
         auto it = find(link_names.begin(),link_names.end(),ef);
         int link_index = distance(link_names.begin(),it);
-        tf::Vector3 pos(0,0.3*k,0);
+        tf2::Vector3 pos(0,0.3*k,0);
         if(link_index<link_names.size()) {
             iDynTree::Matrix4x4 pose = kinDynComp.getWorldTransform(link_index).asHomogeneousTransform();
-            pos = tf::Vector3(pose.getVal(0,3),pose.getVal(1,3),pose.getVal(2,3));
+            pos = tf2::Vector3(pose.getVal(0,3),pose.getVal(1,3),pose.getVal(2,3));
         }
 
         make6DofMarker(false,visualization_msgs::InteractiveMarkerControl::MOVE_3D,pos,false,0.15,"world",ef.c_str());
 
+
+    //???
+    //
+    //
+    //      
         moveEndEffector_as[ef].reset(
                 new actionlib::SimpleActionServer<roboy_control_msgs::MoveEndEffectorAction>(
                         *(nh.get()), ("CARDSflow/MoveEndEffector/"+ef).c_str(),
@@ -311,17 +331,45 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     }
 
     if (this->external_robot_state) {
-        ROS_WARN("Subscribing to external joint state");
-        joint_state_sub = nh->subscribe("/external_joint_states", 100, &Robot::JointState, this);
+        RCLCPP_WARN(rclcpp::get_logger(),"Subscribing to external joint state");
+        //joint_state_sub = nh->subscribe("/external_joint_states", 100, &Robot::JointState, this);
+        joint_state_sub = node_->create_subscription<sensor_msgs::msg::JointState>(
+          "/external_joint_states", 100, std::bind(&Robot::JointState, this, std::placeholders::_1));
     }
-    joint_target_sub = nh->subscribe("/joint_targets", 100, &Robot::JointTarget, this);
-    floating_base_sub = nh->subscribe("/floating_base", 100, &Robot::FloatingBase, this);
-    ik_srv = nh->advertiseService("/ik", &Robot::InverseKinematicsService, this);
-    execute_ik_srv = nh->advertiseService("/execute_ik",  &Robot::ExecuteIK, this);
-    ik_two_frames_srv = nh->advertiseService("/ik_multiple_frames", &Robot::InverseKinematicsMultipleFramesService, this);
-    fk_srv = nh->advertiseService("/fk", &Robot::ForwardKinematicsService, this);
-    link_pose_srv = nh->advertiseService("/get_link_pose", &Robot::GetLinkPoseService, this);
-    interactive_marker_sub = nh->subscribe("/interactive_markers/feedback",1,&Robot::InteractiveMarkerFeedback, this);
+    //joint_target_sub = nh->subscribe("/joint_targets", 100, &Robot::JointTarget, this);
+    joint_target_sub = node_->create_subscription<sensor_msgs::msg::JointStateConstPtr>(
+      "/joint_targets", 100, std::bind(&Robot::JointTarget, this, std::placeholders::_1));
+
+    //floating_base_sub = nh->subscribe("/floating_base", 100, &Robot::FloatingBase, this);
+    floating_base_sub = node_->create_subscription<geometry_msgs::msg::PoseConstPtr>(
+      "/floating_base", 100, std::bind(&Robot::FloatingBase, this, std::placeholders::_1));
+
+    //ik_srv = nh->advertiseService("/ik", &Robot::InverseKinematicsService, this);
+    ik_srv = node_->create_service<roboy_middleware_msgs::InverseKinematics>(
+      "/ik", std::bind(&Robot::InverseKinematicsService, this, std::placeholders::_1, std::placeholders::_2));
+
+    //execute_ik_srv = nh->advertiseService("/execute_ik",  &Robot::ExecuteIK, this);
+    execute_ik_srv = node_->create_service<roboy_middleware_msgs::InverseKinematics>(
+      "/execute_ik", std::bind(&Robot::ExecuteIK, this, std::placeholders::_1, std::placeholders::_2));
+
+
+    //ik_two_frames_srv = nh->advertiseService("/ik_multiple_frames", &Robot::InverseKinematicsMultipleFramesService, this);
+    ik_two_frames_srv = node_->create_service<roboy_middleware_msgs::InverseKinematicsMultipleFrames>(
+      "/ik_multiple_frames", std::bind(&Robot::InverseKinematicsMultipleFramesService, this, std::placeholders::_1, std::placeholders::_2));
+
+    //fk_srv = nh->advertiseService("/fk", &Robot::ForwardKinematicsService, this);
+     fk_srv = node_->create_service<roboy_middleware_msgs::ForwardKinematics>(
+      "/fk", std::bind(&Robot::ForwardKinematicsService, this, std::placeholders::_1, std::placeholders::_2));
+
+    
+    //link_pose_srv = nh->advertiseService("/get_link_pose", &Robot::GetLinkPoseService, this);
+    link_pose_srv = node_->create_service<roboy_control_msgs::GetLinkPose>(
+      "/get_link_pose", std::bind(&Robot::GetLinkPoseService, this, std::placeholders::_1, std::placeholders::_2));    
+    
+    //interactive_marker_sub = nh->subscribe("/interactive_markers/feedback",1,&Robot::InteractiveMarkerFeedback, this);
+    interactive_marker_sub = node_->create_subscription<visualization_msgs::InteractiveMarkerFeedbackConstPtr>(
+      "/interactive_markers/feedback", 1, std::bind(&Robot::InteractiveMarkerFeedback, this, std::placeholders::_1));
+
 }
 
 VectorXd Robot::resolve_function(MatrixXd &A_eq, VectorXd &b_eq, VectorXd &f_min, VectorXd &f_max) {
@@ -370,17 +418,17 @@ VectorXd Robot::resolve_function(MatrixXd &A_eq, VectorXd &b_eq, VectorXd &f_min
                 for (int i = 0; i < number_of_cables; i++) {
                     f_opt(i) = FOpt[i];
                 }
-                ROS_INFO_STREAM_THROTTLE(1, "target cable forces:\n" << f_opt.transpose());
+                RCLCPP_INFO_THROTTLE(rclcpp::get_logger(), std::chrono::seconds(1), "target cable forces:\n" << f_opt.transpose());
                 break;
             }
             default: {
-                ROS_ERROR_STREAM_THROTTLE(1, MessageHandling::getErrorCodeMessage(status));
+                RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(), *rclcpp::get_clock(), std::chrono::seconds(1), MessageHandling::getErrorCodeMessage(status));
                 if (qp_solver.isInfeasible()) {
                     qp_solver.getPrimalSolution(FOpt);
                     for (int i = 0; i < number_of_cables; i++) {
                         f_opt(i) = FOpt[i];
                     }
-                    ROS_WARN_STREAM_THROTTLE(1, "infeasible, primal solution " << f_opt.transpose());
+                    RCLCPP_WARN_THROTTLE(rclcpp::get_logger(), std::chrono::seconds(1), "infeasible, primal solution " << f_opt.transpose());
 //                    f_opt.setZero();
                 } else {
                     if (status = (returnValue) 54)
@@ -397,7 +445,9 @@ void Robot::update() {
       q = q_target;
     }
 
-    ros::Time t0 = ros::Time::now();
+
+    rclcpp::Time t0;
+    t0 = rclcpp::Clock().now();
     iDynTree::fromEigen(robotstate.world_H_base, world_H_base);
     iDynTree::toEigen(robotstate.jointPos) = q;
     iDynTree::fromEigen(robotstate.baseVel, baseVel);
@@ -445,7 +495,7 @@ void Robot::update() {
         i++;
     }
 
-    if ((1.0 / (ros::Time::now() - last_visualization).toSec()) < 30) {
+    if ((1.0 / (rclcpp::Clock().now() - last_visualization).toSec()) < 30) {
         { // tendon state publisher
             roboy_simulation_msgs::Tendon msg;
             for (int i = 0; i < number_of_cables; i++) {
@@ -455,23 +505,26 @@ void Robot::update() {
                 msg.ld.push_back(Ld[0][i]); // TODO: only first endeffector Ld is send here
                 msg.number_of_viapoints.push_back(cables[i].viaPoints.size());
                 for (auto vp:cables[i].viaPoints) {
-                    geometry_msgs::Vector3 VP;
-                    tf::vectorEigenToMsg(vp->global_coordinates, VP);
+                    geometry_msgs::msg::Vector3 VP;
+                    // tf::vectorEigenToMsg(vp->global_coordinates, VP);
+                    tf2::convert(vp->global_coordinates, VP);
+
                     msg.viapoints.push_back(VP);
                 }
             }
-            tendon_state_pub.publish(msg);
+            tendon_state_pub->publish(msg);
         }
         { // robot state publisher
             static int seq = 0;
             for (int i = 0; i < number_of_links; i++) {
-                geometry_msgs::PoseStamped msg;
+                geometry_msgs::msg::PoseStamped msg;
                 msg.header.seq = seq++;
-                msg.header.stamp = ros::Time::now();
+                msg.header.stamp = rclcpp::Clock().now();
                 msg.header.frame_id = link_names[i];
                 Isometry3d iso(link_to_world_transform[i]);
-                tf::poseEigenToMsg(iso, msg.pose);
-                robot_state_pub.publish(msg);
+                // tf::poseEigenToMsg(iso, msg.pose);
+                tf2::toMsg(iso, msg.pose);
+                robot_state_pub->publish(msg);
             }
         }
         { // robot target publisher
@@ -496,13 +549,14 @@ void Robot::update() {
                     target_poses.push_back(iDynTree::toEigen(kinDynCompTarget.getWorldTransform(i).asHomogeneousTransform()));
                     Vector3d com = iDynTree::toEigen(model.getLink(i)->getInertia().getCenterOfMass());
                     target_poses[i].block(0, 3, 3, 1) += target_poses[i].block(0, 0, 3, 3) * com;
-                    geometry_msgs::PoseStamped msg;
+                    geometry_msgs::msg::PoseStamped msg;
                     msg.header.seq = seq++;
-                    msg.header.stamp = ros::Time::now();
+                    msg.header.stamp = rclcpp::Clock().now();
                     msg.header.frame_id = link_names[i];
                     Isometry3d iso(target_poses[i]);
-                    tf::poseEigenToMsg(iso, msg.pose);
-                    robot_state_target_pub.publish(msg);
+                    // tf::poseEigenToMsg(iso, msg.pose);
+                    tf2::toMsg(iso, msg.pose);
+                    robot_state_target_pub->publish(msg);
                 }
 
                 int i=0;
@@ -545,15 +599,15 @@ void Robot::update() {
                 cf_msg.velocity.push_back(qd[i-1]);
 
             }
-            joint_state_pub.publish(msg);
-            cardsflow_joint_states_pub.publish(cf_msg);
+            joint_state_pub->publish(msg);
+            cardsflow_joint_states_pub->publish(cf_msg);
         }
-        last_visualization = ros::Time::now();
+        last_visualization = rclcpp::Clock().now();
     }
 //    ROS_INFO_STREAM_THROTTLE(5, "q_target " << q_target.transpose().format(fmt));
 //    ROS_INFO_STREAM_THROTTLE(5, "qdd " << qdd.transpose().format(fmt));
 //    ROS_INFO_STREAM_THROTTLE(5, "qd " << qd.transpose().format(fmt));
-   ROS_INFO_STREAM_THROTTLE(5, "q " << q.transpose().format(fmt));
+   RCLCPP_INFO_THROTTLE(rclcpp::get_logger(), std::chrono::seconds(5), "q " << q.transpose().format(fmt));
 //    ROS_INFO_STREAM_THROTTLE(5, "l " << l.transpose().format(fmt));
 //    ROS_INFO_STREAM_THROTTLE(5, "ld " << Ld[0].transpose().format(fmt));
 //    ROS_INFO_STREAM_THROTTLE(5, "torques " << torques.transpose().format(fmt));
@@ -563,7 +617,7 @@ void Robot::update() {
 bool Robot::ForwardKinematicsService(roboy_middleware_msgs::ForwardKinematics::Request &req,
                                      roboy_middleware_msgs::ForwardKinematics::Response &res) {
     if (ik_models.find(req.endeffector) == ik_models.end()) {
-        ROS_ERROR_STREAM("endeffector " << req.endeffector << " not initialized");
+        RCLCPP_ERROR_STREAM(rclcpp::get_logger(), "endeffector " << req.endeffector << " not initialized");
         return false;
     }
     int index = endeffector_index[req.endeffector];
@@ -582,7 +636,7 @@ bool Robot::ForwardKinematicsService(roboy_middleware_msgs::ForwardKinematics::R
         if (joint_index != iDynTree::JOINT_INVALID_INDEX) {
             jointPos(joint_index) = req.angles[i];
         } else {
-            ROS_WARN_THROTTLE(5.0, "joint %s not found in model", joint.c_str());
+            RCLCPP_WARN_THROTTLE(rclcpp::get_logger(), std::chrono::seconds(5), "joint %s not found in model", joint.c_str());
         }
         i++;
     }
@@ -593,14 +647,14 @@ bool Robot::ForwardKinematicsService(roboy_middleware_msgs::ForwardKinematics::R
             ik_models[req.endeffector].model().getFrameIndex(req.frame));
     Eigen::Matrix4d frame = iDynTree::toEigen(trans.asHomogeneousTransform());
     Eigen::Isometry3d iso(frame);
-    tf::poseEigenToMsg(iso, res.pose);
+    tf2::toMsg(iso, msg.pose);
     return true;
 }
 
 bool Robot::InverseKinematicsService(roboy_middleware_msgs::InverseKinematics::Request &req,
                                      roboy_middleware_msgs::InverseKinematics::Response &res) {
     if (ik_models.find(req.endeffector) == ik_models.end()) {
-        ROS_ERROR_STREAM("endeffector " << req.endeffector << " not initialized");
+        RCLCPP_ERROR_STREAM(rclcpp::get_logger(),"endeffector " << req.endeffector << " not initialized");
         return false;
     }
     int index = endeffector_index[req.endeffector];
@@ -635,7 +689,7 @@ bool Robot::InverseKinematicsService(roboy_middleware_msgs::InverseKinematics::R
     switch (req.type) {
         case 0: {
             Eigen::Isometry3d iso;
-            tf::poseMsgToEigen(req.pose, iso);
+            tf2::toMsg(iso, msg.pose);
             iDynTree::Transform trans;
             iDynTree::fromEigen(trans, iso.matrix());
             ok = ik[req.endeffector].addTarget(req.target_frame, trans);
@@ -730,7 +784,7 @@ bool Robot::InverseKinematicsService(roboy_middleware_msgs::InverseKinematics::R
     } else {
         switch (req.type) {
             case 0:
-                ROS_ERROR("unable to solve full pose ik for endeffector %s and target frame %s:\n"
+                RCLCPP_ERROR(rclcpp::get_logger(),"unable to solve full pose ik for endeffector %s and target frame %s:\n"
                           "target_position    %.3lf %.3lf %.3lf"
                           "target_orientation %.3lf %.3lf %.3lf %.3lf", req.endeffector.c_str(), req.target_frame.c_str(),
                           req.pose.position.x, req.pose.position.y, req.pose.position.z,
@@ -738,13 +792,13 @@ bool Robot::InverseKinematicsService(roboy_middleware_msgs::InverseKinematics::R
                           req.pose.orientation.z);
                 break;
             case 1:
-                ROS_ERROR("unable to solve position ik for endeffector %s and target frame %s:\n"
+                RCLCPP_ERROR(rclcpp::get_logger(),"unable to solve position ik for endeffector %s and target frame %s:\n"
                           "target_position    %.3lf %.3lf %.3lf", req.endeffector.c_str(), req.target_frame.c_str(),
                           req.pose.position.x, req.pose.position.y, req.pose.position.z);
                 break;
 
             case 2:
-                ROS_ERROR("unable to solve orientation ik for endeffector %s and target frame %s:\n"
+                RCLCPP_ERROR(rclcpp::get_logger(),"unable to solve orientation ik for endeffector %s and target frame %s:\n"
                           "target_orientation %.3lf %.3lf %.3lf %.3lf", req.endeffector.c_str(), req.target_frame.c_str(),
                           req.pose.orientation.w, req.pose.orientation.x, req.pose.orientation.y,
                           req.pose.orientation.z);
@@ -758,7 +812,7 @@ bool Robot::InverseKinematicsService(roboy_middleware_msgs::InverseKinematics::R
 bool Robot::InverseKinematicsMultipleFramesService(roboy_middleware_msgs::InverseKinematicsMultipleFrames::Request &req,
                                                    roboy_middleware_msgs::InverseKinematicsMultipleFrames::Response &res) {
     if (ik_models.find(req.endeffector) == ik_models.end()) {
-        ROS_ERROR_STREAM("endeffector " << req.endeffector << " not initialized");
+        RCLCPP_ERROR_STREAM(rclcpp::get_logger(),"endeffector " << req.endeffector << " not initialized");
         return false;
     }
     int index = endeffector_index[req.endeffector];
@@ -797,7 +851,7 @@ bool Robot::InverseKinematicsMultipleFramesService(roboy_middleware_msgs::Invers
         iDynTree::Transform base_solution;
         iDynTree::VectorDynSize q_star;
         ik[req.endeffector].getFullJointsSolution(base_solution, q_star);
-        ROS_INFO_STREAM("ik solution:\n" << "base solution:" << base_solution.toString() << "\njoint solution: "
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),"ik solution:\n" << "base solution:" << base_solution.toString() << "\njoint solution: "
                                          << q_star.toString());
         for (int i = 0; i < q_star.size(); i++) {
             res.joint_names.push_back(ik[req.endeffector].reducedModel().getJointName(i));
@@ -809,7 +863,7 @@ bool Robot::InverseKinematicsMultipleFramesService(roboy_middleware_msgs::Invers
             case 0:
                 break;
             case 1:
-                ROS_ERROR("unable to solve position ik");
+                RCLCPP_ERROR(rclcpp::get_logger(),"unable to solve position ik");
                 break;
 
             case 2:
@@ -859,7 +913,7 @@ bool Robot::GetLinkPoseService(roboy_control_msgs::GetLinkPose::Request &req,
         
         if (req.link_name == link_names[i]) {
             Isometry3d iso(link_to_world_transform[i]);
-            tf::poseEigenToMsg(iso, res.pose);
+            tf2::toMsg(iso, msg.pose)
             return true;
         }
         
@@ -877,13 +931,13 @@ void Robot::JointState(const sensor_msgs::JointStateConstPtr &msg) {
       for (string joint:msg->name) {
           float offset = 0;
           if(joint=="elbow_right")
-            nh->getParam("elbow_right_offset", offset);
+            node_->get_parameter("elbow_right_offset", offset);
           int joint_index = model.getJointIndex(joint);
           if (joint_index != iDynTree::JOINT_INVALID_INDEX) {
               q(joint_index) = msg->position[i]+offset;
               qd(joint_index) = msg->velocity[i];
           } else {
-              ROS_WARN_THROTTLE(5.0, "joint %s not found in model", joint.c_str());
+              RCLCPP_WARN_THROTTLE(rclcpp::get_logger(), std::chrono::seconds(5), "joint %s not found in model", joint.c_str());
           }
           i++;
       }
@@ -908,15 +962,15 @@ void Robot::JointTarget(const sensor_msgs::JointStateConstPtr &msg){
             }
             //qd_target(joint_index) = msg->velocity[i];
         } else {
-            ROS_WARN_THROTTLE(5.0, "joint %s not found in model", joint.c_str());
+            RCLCPP_WARN_THROTTLE(rclcpp::get_logger(), std::chrono::seconds(5), "joint %s not found in model", joint.c_str());
         }
         i++;
     }
 }
 
-void Robot::FloatingBase(const geometry_msgs::PoseConstPtr &msg) {
+void Robot::FloatingBase(const geometry_msgs::msg::PoseConstPtr &msg) {
     Isometry3d iso;
-    tf::poseMsgToEigen(*msg, iso);
+    tf2::fromMsg(msg->pose, iso);
     world_H_base = iso.matrix();
 }
 
@@ -926,12 +980,15 @@ void Robot::MoveEndEffector(const roboy_control_msgs::MoveEndEffectorGoalConstPt
     bool success = true, timeout = false;
 
     double error = 10000;
-    ros::Time last_feedback_time = ros::Time::now(), start_time = ros::Time::now();
+    // ros::Time last_feedback_time = ros::Time::now(), start_time = ros::Time::now();
+    rclcpp::Clock clock;
+    rclcpp::Time last_feedback_time = clock.now(), start_time = clock.now();
+
     bool ik_solution_available = false;
 
     auto it = find(endeffectors.begin(),endeffectors.end(),goal->endeffector);
     if (it == endeffectors.end()) {
-        ROS_ERROR_STREAM("MoveEndEffector: FAILED endeffector " << goal->endeffector << " does not exist");
+        RCLCPP_ERROR_STREAM(rclcpp::get_logger(),"MoveEndEffector: FAILED endeffector " << goal->endeffector << " does not exist");
 //        moveEndEffector_as[goal->endeffector]->setAborted(result, "endeffector " + goal->endeffector + " does not exist");
         return;
     }
@@ -949,7 +1006,7 @@ void Robot::MoveEndEffector(const roboy_control_msgs::MoveEndEffectorGoalConstPt
             break;
         }
         case 1: {
-            geometry_msgs::Pose p;
+            geometry_msgs::msg::Pose p;
             getTransform("world",goal->target_frame,p);
             Quaterniond q0(p.orientation.w,p.orientation.x,p.orientation.y,p.orientation.z);
             Quaterniond q1(goal->pose.orientation.w,goal->pose.orientation.x,goal->pose.orientation.y,goal->pose.orientation.z);
@@ -968,8 +1025,8 @@ void Robot::MoveEndEffector(const roboy_control_msgs::MoveEndEffectorGoalConstPt
     publishCube(srv.request.pose, "world", "ik_target", 696969, COLOR(0, 1, 0, 1), 0.05, goal->timeout);
     int offset = endeffector_dof_offset[endeffector_index[goal->endeffector]];
     while (error > goal->tolerance && success && !timeout) {
-        if (moveEndEffector_as[goal->endeffector]->isPreemptRequested() || !ros::ok()) {
-            ROS_INFO("move endeffector: Preempted");
+        if (moveEndEffector_as[goal->endeffector]->isPreemptRequested() || !rclcpp::ok()) {
+            RCLCPP_INFO(rclcpp::get_logger(),"move endeffector: Preempted");
             // set the action state to preempted
             moveEndEffector_as[goal->endeffector]->setPreempted();
             timeout = true;
@@ -982,7 +1039,7 @@ void Robot::MoveEndEffector(const roboy_control_msgs::MoveEndEffectorGoalConstPt
                 std_msgs::Float32 msg;
                 for (int i = offset; i < offset+endeffector_number_of_dofs[endeffector_index[goal->endeffector]]; i++) {
                     msg.data = srv.response.angles[j];
-                    joint_command_pub[i].publish(msg);
+                    joint_command_pub[i]->publish(msg);
                     j++;
                 }
             } else {
@@ -1001,24 +1058,24 @@ void Robot::MoveEndEffector(const roboy_control_msgs::MoveEndEffectorGoalConstPt
             break;
         }
 
-        if ((ros::Time::now() - last_feedback_time).toSec() > 1) {
-            last_feedback_time = ros::Time::now();
+        if ((rclcpp::Clock().now() - last_feedback_time).toSec() > 1) {
+            last_feedback_time = rclcpp::Clock().now();
             // publish the feedback
             feedback.error = error;
             moveEndEffector_as[goal->endeffector]->publishFeedback(feedback);
         }
-        if ((ros::Time::now() - start_time).toSec() > goal->timeout) {
-            ROS_ERROR("move endeffector timeout %d", goal->timeout);
+        if ((rclcpp::Clock().now() - start_time).toSec() > goal->timeout) {
+            RCLCPP_ERROR(rclcpp::get_logger(),"move endeffector timeout %d", goal->timeout);
             success = false;
         }
     }
     // publish the feedback
     moveEndEffector_as[goal->endeffector]->publishFeedback(feedback);
     if (error < goal->tolerance && success && !timeout) {
-        ROS_INFO("MoveEndEffector: Succeeded");
+        RCLCPP_INFO(rclcpp::get_logger(),"MoveEndEffector: Succeeded");
         moveEndEffector_as[goal->endeffector]->setSucceeded(result, "done");
     } else {
-        ROS_WARN("MoveEndEffector: FAILED");
+        RCLCPP_WARN(rclcpp::get_logger(),"MoveEndEffector: FAILED");
         moveEndEffector_as[goal->endeffector]->setAborted(result, "failed");
     }
 }
@@ -1027,7 +1084,7 @@ bool Robot::parseViapoints(const string &viapoints_file_path, vector<Cable> &cab
     // initialize TiXmlDocument doc from file
     TiXmlDocument doc(viapoints_file_path.c_str());
     if (!doc.LoadFile()) {
-        ROS_FATAL("Can't parse via points file %s.", viapoints_file_path.c_str());
+        RCLCPP_FATAL_STREAM(rclcpp::get_logger(),"Can't parse via points file %s.", viapoints_file_path.c_str());
         return false;
     }
 
@@ -1051,7 +1108,7 @@ bool Robot::parseViapoints(const string &viapoints_file_path, vector<Cable> &cab
                          viaPoint_child_it = viaPoint_child_it->NextSiblingElement("viaPoint")) {
                         float x, y, z;
                         if (sscanf(viaPoint_child_it->GetText(), "%f %f %f", &x, &y, &z) != 3) {
-                            ROS_ERROR_STREAM_NAMED("parser", "error reading [via point] (x y z)");
+                            RCLCPP_ERROR_STREAM(rclcpp::get_logger("parser"), "error reading [via point] (x y z)");
                             return false;
                         }
                         Vector3d local_coordinates(x, y, z);
@@ -1061,17 +1118,17 @@ bool Robot::parseViapoints(const string &viapoints_file_path, vector<Cable> &cab
                             cable.viaPoints.push_back(ViaPointPtr(new ViaPoint(link_name, local_coordinates)));
                     }
                     if (cable.viaPoints.empty()) {
-                        ROS_ERROR_STREAM_NAMED("parser", "No viaPoint element found in myoMuscle '"
+                        RCLCPP_ERROR_STREAM(rclcpp::get_logger("parser"), "No viaPoint element found in myoMuscle '"
                                 << cable.name << "' link element.");
                         return false;
                     }
                 } else {
-                    ROS_ERROR_STREAM_NAMED("parser", "No link name attribute specified for myoMuscle'"
+                    RCLCPP_ERROR_STREAM(rclcpp::get_logger("parser"), "No link name attribute specified for myoMuscle'"
                             << cable.name << "'.");
                     continue;
                 }
             }
-            ROS_INFO("%ld viaPoints for myoMuscle %s", cable.viaPoints.size(), cable.name.c_str());
+            RCLCPP_INFO(rclcpp::get_logger(), "%ld viaPoints for myoMuscle %s", cable.viaPoints.size(), cable.name.c_str());
         }
         cables.push_back(cable);
     }
