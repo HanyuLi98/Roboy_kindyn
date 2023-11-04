@@ -126,11 +126,13 @@ public:
         system_status_thread = boost::shared_ptr<std::thread>(new std::thread(&UpperBody::SystemStatusPublisher, this));
         system_status_thread->detach();
 
-        tendon_motor_pub = nh->advertise<roboy_simulation_msgs::Tendon>(topic_root + "control/tendon_state_motor", 1);
+        //tendon_motor_pub = nh->advertise<roboy_simulation_msgs::Tendon>(topic_root + "control/tendon_state_motor", 1);
+        tendon_motor_pub = node_->create_publisher<roboy_simulation_msgs::Tendon>(topic_root + "control/tendon_state_motor", 1);
 
-        nh->setParam("initialized", init_called);
-
-        ROS_INFO_STREAM("Finished setup");
+        //nh->setParam("initialized", init_called);
+        node_->set_parameter(rclcpp::Parameter("initialized", init_called));
+        
+        RCLCPP_INFO(node_->get_logger(), "Finished setup");
     };
 
     ~UpperBody() {
@@ -139,17 +141,17 @@ public:
     }
 
     void SystemStatusPublisher() {
-        ros::Rate rate(100);
-        while (ros::ok()) {
+        rclcpp::Rate rate(100);
+        while (rclcpp::ok()) {
             auto msg = roboy_middleware_msgs::SystemStatus();
-            msg.header.stamp = ros::Time::now();
+            msg.header.stamp = rclcpp::Clock().now();
             auto body_part = roboy_middleware_msgs::BodyPart();
             for (auto part: body_parts) {
                 body_part.name = part;
                 body_part.status = !init_called[part];
                 msg.body_parts.push_back(body_part);
             }
-            system_status_pub.publish(msg);
+            system_status_pub->publish(msg);
             rate.sleep();
         }
 
@@ -165,7 +167,7 @@ public:
         }
 
         for (string body_part: req.strings) {
-            ROS_WARN_STREAM("init called for: " << body_part);
+            RCLCPP_WARN_STREAM(rclcpp::get_logger(),"init called for: " << body_part);
             init_called[body_part] = false;
             auto r = initBodyPart(body_part);
             res.result = r*res.result;
@@ -176,31 +178,31 @@ public:
 
 
     bool initBodyPart(string name) {
-        ROS_WARN_STREAM("initBodyPart: " << name);
+        RCLCPP_WARN_STREAM(rclcpp::get_logger(),"initBodyPart: " << name);
 
         std::vector<int> motor_ids;
         try {
-            nh->getParam(name+"/motor_ids", motor_ids);
+            node_->getParam(name+"/motor_ids", motor_ids);
         }
         catch (const std::exception&) {
-            ROS_ERROR("motor ids for %s are not on the parameter server. check motor_config.yaml in robots.", name);
+            RCLCPP_ERROR(rclcpp::get_logger(),"motor ids for %s are not on the parameter server. check motor_config.yaml in robots.", name);
             return false;
         }
         int pwm;
         try {
             if (name == "wrist_left" || name == "wrist_right") {
-                nh->getParam("m3_pwm", pwm);
+                node_->getParam("m3_pwm", pwm);
             } else {
-                nh->getParam("pwm",pwm);
+                node_->getParam("pwm",pwm);
             }
         }
         catch (const std::exception&) {
-            ROS_ERROR_STREAM("rosparam pwm or init_m3_displacement is not set. will not init.");
+           RCLCPP_ERROR(rclcpp::get_logger(),"rosparam pwm or init_m3_displacement is not set. will not init.");
             return false;
         }
 
 
-        ROS_INFO("changing control mode of motors to PWM with %d",pwm);
+        RCLCPP_INFO(rclcpp::get_logger(),"changing control mode of motors to PWM with %d",pwm);
         roboy_middleware_msgs::ControlMode msg;
 
 
@@ -222,33 +224,35 @@ public:
         }
 
 
-        ROS_INFO_STREAM(str1.str());
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(), str1.str());
 
 
         if (!control_mode[name].call(msg)) {
-            ROS_ERROR("Changing control mode for %s didnt work", name);
+            RCLCPP_ERROR(rclcpp::get_logger(), "Changing control mode for %s didnt work", name);
             return false;
         }
 
 
-        ros::Time t0;
-        t0= ros::Time::now();
+        rclcpp::Time t0;
+        t0 = rclcpp::Clock().now();
         double timeout = 0;
-        nh->getParam("timeout",timeout);
+        node_->getParam("timeout",timeout);
         if(timeout==0) {
             int seconds = 5;
-            while ((ros::Time::now() - t0).toSec() < 5) {
-                ROS_INFO_THROTTLE(1, "waiting %d", seconds--);
+            while (( rclcpp::Clock().now() - t0).toSec() < 5) {
+                //ROS_INFO_THROTTLE(1, "waiting %d", seconds--);
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(1), "waiting %d", seconds--);
             }
         }else{
             int seconds = timeout;
             while ((ros::Time::now() - t0).toSec() < timeout) {
-                ROS_INFO_THROTTLE(1, "waiting %d", seconds--);
+                // ROS_INFO_THROTTLE(1, "waiting %d", seconds--);
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(1), "waiting %d", seconds--);
             }
         }
         motor_status_received[name] = true;
         if(!motor_status_received[name]) {
-            ROS_ERROR("did not receive motor status for %s, try again", name);
+            RCLCPP_ERROR(rclcpp::get_logger(),"did not receive motor status for %s, try again", name);
             return false;
         }
 
@@ -260,9 +264,10 @@ public:
 
 
         // Make sure we get current actual joint state
-        t0= ros::Time::now();
+        rclcpp::Time t0;
+        t0 = rclcpp::Clock().now();
         int seconds = 1;
-        while ((ros::Time::now() - t0).toSec() < 1) {
+        while (( rclcpp::Clock().now(); - t0).toSec() < 1) {
             ROS_INFO_THROTTLE(1, "waiting %d for external joint state", seconds--);
         }
 
@@ -273,15 +278,15 @@ public:
 
         for (int i = 0; i < motor_ids.size(); i++) {
             int motor_id = motor_ids[i];
-            ROS_WARN_STREAM(name << " info print");
+            RCLCPP_WARN_STREAM(rclcpp::get_logger(),name << " info print");
             l_offset[motor_id] = l_current[motor_id] + position[motor_id];
             str << motor_id << "\t|\t" << position[motor_id] << "\t|\t" << l_current[motor_id] << "\t|\t"
                 << l_offset[motor_id] << endl;
         }
 
-        ROS_INFO_STREAM(str.str());
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),str.str());
 
-        ROS_INFO_STREAM("changing control mode of %s to POSITION" << name);
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),"changing control mode of %s to POSITION" << name);
 
         roboy_middleware_msgs::ControlMode msg1;
         msg1.request.control_mode = ENCODER0_POSITION;
@@ -291,7 +296,7 @@ public:
         }
 
         if (!control_mode[name].call(msg1)) {
-            ROS_ERROR_STREAM("Changing control mode for %s didnt work" << name);
+            RCLCPP_ERROR(rclcpp::get_logger(),"Changing control mode for %s didnt work" << name);
             return false;
         }
 
@@ -307,19 +312,20 @@ public:
             // Set current state to bullet
             publishBulletTarget(name, BulletPublish::current);
 
-            t0 = ros::Time::now();
+            t0 = rclcpp::Clock().now();
             int seconds = 3;
-            while ((ros::Time::now() - t0).toSec() < 3) {
-                ROS_INFO_THROTTLE(1, "waiting %d for setting bullet", seconds--);
+            while ((t0 = rclcpp::Clock().now(); - t0).toSec() < 3) {
+                //ROS_INFO_THROTTLE(1, "waiting %d for setting bullet", seconds--);
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(1), "waiting %d for setting bullet", seconds--);
             }
 
             // Move back to zero position
             publishBulletTarget(name, BulletPublish::zeroes);
         }
 
-        ROS_INFO_STREAM("%s pose init done" << name);
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),"%s pose init done" << name);
         init_called[name] = true;
-        nh->setParam("initialized", init_called);
+        node_->setParam("initialized", init_called);
 
         return true;
 
@@ -337,12 +343,12 @@ public:
 
         // set respecitve body part joint targets to 0
         string endeffector;
-        nh->getParam(body_part+"/endeffector", endeffector);
+        node_->getParam(body_part+"/endeffector", endeffector);
         if ( !endeffector.empty() ) {
             vector<string> ik_joints;
-            nh->getParam((endeffector + "/joints"), ik_joints);
+            node_->getParam((endeffector + "/joints"), ik_joints);
             if (ik_joints.empty()) {
-                ROS_ERROR(
+                RCLCPP_ERROR(rclcpp::get_logger(),
                         "endeffector %s has no joints defined, check your endeffector.yaml or parameter server.  skipping...",
                         body_part.c_str());
             }
@@ -355,10 +361,10 @@ public:
 
                         if(zeroes_or_current == BulletPublish::zeroes) {
                             target_msg.position.push_back(0);
-                            ROS_WARN_STREAM("Set target 0 for " << joint);
+                            RCLCPP_WARN_STREAM(rclcpp::get_logger(),"Set target 0 for " << joint);
                         }else if(zeroes_or_current == BulletPublish::current){
                             target_msg.position.push_back(q[joint_index]);
-                            ROS_WARN_STREAM("Set target " << q[joint_index] << " for " << joint);
+                            RCLCPP_WARN_STREAM(rclcpp::get_logger(),"Set target " << q[joint_index] << " for " << joint);
                         }
                     }
                 }
@@ -366,7 +372,7 @@ public:
             }
         }
 
-        joint_target_pub.publish(target_msg);
+        joint_target_pub->publish(target_msg);
     }
 
 
@@ -376,23 +382,23 @@ public:
             std::vector<int> motor_ids;
             try {
 //                mux.lock();
-                nh->getParam(body_part+"/motor_ids", motor_ids);
+                node_->getParam(body_part+"/motor_ids", motor_ids);
 //                mux.unlock();
             }
             catch (const std::exception&) {
-                ROS_ERROR("motor ids for %s are not on the parameter server. check motor_config.yaml in robots.", body_part);
+                RCLCPP_ERROR(rclcpp::get_logger(),"motor ids for %s are not on the parameter server. check motor_config.yaml in robots.", body_part);
                 return ret;
             }
             if (find(motor_ids.begin(), motor_ids.end(), id) != motor_ids.end()) {
                 return body_part;
             }
         }
-        ROS_WARN_ONCE("Seems like motor with id %d does not belong to any body part", id);
+        RCLCPP_WARN_ONCE(rclcpp::get_logger(), "Seems like motor with id %d does not belong to any body part", id);
         return ret;
     }
 
     void MotorState(const roboy_middleware_msgs::MotorState::ConstPtr &msg){
-        prev_roboy_state_time = ros::Time::now();
+        prev_roboy_state_time = rclcpp::Clock().now();
 
         int i=0;
         for (auto id:msg->global_id) {
@@ -426,22 +432,22 @@ public:
                     if (body_part != "wrist_left" && body_part != "wrist_right")
                     {
                     //            communication_established[id] = false;
-                    ROS_WARN_THROTTLE(10,"Did not receive motor status for motor with id: %d. %s Body part is disabled.", (id, body_part));
+                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(10),"Did not receive motor status for motor with id: %d. %s Body part is disabled.", (id, body_part));
 
                         // TODO fix triceps
                         //if (id != 18 && body_part != "shoulder_right") {
                         if(init_called[body_part]) {
                             init_called[body_part] = false;
-                            nh->setParam("initialized", init_called);
+                            node_->setParam("initialized", init_called);
 
                             // set respecitve body part joint targets to 0
                             string endeffector;
-                            nh->getParam(body_part+"/endeffector", endeffector);
+                            node_->getParam(body_part+"/endeffector", endeffector);
                             if ( !endeffector.empty() ) {
                                 vector<string> ik_joints;
                                 nh->getParam((endeffector + "/joints"), ik_joints);
                                 if (ik_joints.empty()) {
-                                    ROS_ERROR(
+                                    RCLCPP_ERROR(rclcpp::get_logger(),
                                             "endeffector %s has no joints defined, check your endeffector.yaml or parameter server.  skipping...",
                                             body_part.c_str());
                                 }
@@ -451,7 +457,7 @@ public:
                                         int joint_index = kinematics.GetJointIdByName(joint);
                                         if (joint_index != iDynTree::JOINT_INVALID_INDEX) {
                                             q_target(joint_index) = 0;
-                                            ROS_WARN_STREAM("Set target 0 for " << joint);
+                                            RCLCPP_WARN_STREAM(rclcpp::get_logger(),"Set target 0 for " << joint);
                                         }
                                     }
 
@@ -501,20 +507,20 @@ public:
                 // reset the joint targets
                 q_target.setZero();
             }
-            ROS_ERROR_STREAM_THROTTLE(5, "No messages from roboy_plexus. Will not be sending MotorCommand...");
+             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(5), "No messages from roboy_plexus. Will not be sending MotorCommand...");
             return;
         }
 
         for (auto body_part: body_parts) {
             if (!init_called[body_part]) {
-                ROS_WARN_STREAM_THROTTLE(10, body_part << " was not initialized. skipping");
+                 RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(10), body_part << " was not initialized. skipping");
             } else {
 //             if(body_part == "shoulder_right"){
                 std::vector<int> motor_ids;
                 try {
-                    nh->getParam(body_part+"/motor_ids", motor_ids); }
+                    node_->getParam(body_part+"/motor_ids", motor_ids); }
                 catch (const std::exception&) {
-                    ROS_ERROR("motor ids for %s are not on the parameter server. check motor_config.yaml in robots.", body_part);
+                    RCLCPP_ERROR(rclcpp::get_logger(),"motor ids for %s are not on the parameter server. check motor_config.yaml in robots.", body_part);
                 }
 
                 stringstream str;
@@ -529,7 +535,7 @@ public:
                 }
                 motor_command.publish(msg);
                 if(!str.str().empty())
-                    ROS_WARN_STREAM(str.str());
+                    RCLCPP_WARN_STREAM(rclcpp::get_logger(),str.str());
             }
         }
     };
@@ -541,11 +547,13 @@ public:
  * @param cm pointer to the controller manager
  */
 void update(controller_manager::ControllerManager *cm) {
-    ros::Time prev_time = ros::Time::now();
-    ros::Rate rate(500); // changing this value affects the control speed of your running controllers
-    while (ros::ok()) {
-        const ros::Time time = ros::Time::now();
-        const ros::Duration period = time - prev_time;
+    //ros::Time prev_time = ros::Time::now();
+    rclcpp::Time prev_time;
+    prev_time = = rclcpp::Clock().now();
+    rclcpp::Rate rate(500); // changing this value affects the control speed of your running controllers
+    while (rclcpp::ok()) {
+        const rclcpp::Time time = rclcpp::Clock::now();
+        const rclcpp::Duration period = time - prev_time;
         cm->update(time, period);
         prev_time = time;
         rate.sleep();
