@@ -133,6 +133,7 @@ namespace cardsflow {
 
             cardsflow::kindyn::Kinematics kinematics;
             // ros::NodeHandlePtr nh; /// ROS node handle
+            rclcpp::Node::SharedPtr node_;
             // boost::shared_ptr <ros::AsyncSpinner> spinner; /// async ROS spinner
 
             bool torque_position_controller_active = false, force_position_controller_active = false, cable_length_controller_active = false;
@@ -168,7 +169,11 @@ namespace cardsflow {
             
 
             // ros::ServiceServer ik_srv, ik_two_frames_srv, fk_srv, freeze_srv; ??
-            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_srv, ik_two_frames_srv, fk_srv, freeze_srv;
+            //rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_srv, ik_two_frames_srv, fk_srv, freeze_srv;
+            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_srv;
+            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr ik_two_frames_srv;
+            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr fk_srv;
+            rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr freeze_srv;
             string topic_root;
 
             VectorXd q, qd, qdd; /// joint positon, velocity, acceleration

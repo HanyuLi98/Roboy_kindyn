@@ -3,60 +3,72 @@
 //
 
 #include "kindyn/robot_ros2.hpp"
+#include "rclcpp/rclcpp.hpp"
 
 using namespace cardsflow::kindyn;
 
 Robot::Robot() {
-    if (!ros::isInitialized()) {
-        int argc = 0;
-        char **argv = NULL;
-        ros::init(argc, argv, "CARDSflow robot", ros::init_options::NoSigintHandler);
-    }
-    nh = ros::NodeHandlePtr(new ros::NodeHandle);
-    spinner.reset(new ros::AsyncSpinner(0));
-    spinner->start();
+    node_ = std::make_shared<rclcpp::Node>("CARDSflow_robot");
 }
 
 Robot::~Robot() {
 }
 
 void Robot::updatePublishers() {
-    ROS_INFO_STREAM("advertising " << topic_root+"/robot_state");
-    robot_state_pub = nh->advertise<geometry_msgs::PoseStamped>(topic_root+"control/robot_state", 1);
-    tendon_state_pub = nh->advertise<roboy_simulation_msgs::Tendon>(topic_root+"control/tendon_state", 1);
-    tendon_ext_state_pub = nh->advertise<roboy_simulation_msgs::Tendon>(topic_root+"control/tendon_state_ext", 1);
+    RCLCPP_INFO_STREAM(rclcpp::get_logger(),"advertising " << topic_root+"/robot_state");
+    robot_state_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>(topic_root + "control/robot_state", 1);
+    tendon_state_pub = node_->create_publisher<roboy_simulation_msgs::msg::Tendon>(topic_root + "control/tendon_state", 1);
+    tendon_ext_state_pub = node_->create_publisher<roboy_simulation_msgs::msg::Tendon>(topic_root + "control/tendon_state_ext", 1);
 
-    joint_state_pub = nh->advertise<roboy_simulation_msgs::JointState>(topic_root+"control/rviz_joint_states", 1);
-    cardsflow_joint_states_pub = nh->advertise<sensor_msgs::JointState>(topic_root+"control/cardsflow_joint_states", 1);
+    joint_state_pub = node_->create_publisher<roboy_simulation_msgs::msg::JointState>(topic_root + "control/rviz_joint_states", 1);
+    cardsflow_joint_states_pub = node_->create_publisher<sensor_msgs::msg::JointState>(topic_root + "control/cardsflow_joint_states", 1);
 
-    robot_state_target_pub = nh->advertise<geometry_msgs::PoseStamped>(topic_root+"control/robot_state_target", 1);
-    tendon_state_target_pub = nh->advertise<roboy_simulation_msgs::Tendon>(topic_root+"control/tendon_state_target", 1);
-    joint_state_target_pub = nh->advertise<roboy_simulation_msgs::JointState>(topic_root+"control/joint_state_target", 1);
+    robot_state_target_pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>(topic_root + "control/robot_state_target", 1);
+    tendon_state_target_pub = node_->create_publisher<roboy_simulation_msgs::msg::Tendon>(topic_root + "control/tendon_state_target", 1);
+    joint_state_target_pub = node_->create_publisher<roboy_simulation_msgs::msg::JointState>(topic_root + "control/joint_state_target", 1);
+
 }
 
 void Robot::updateSubscribers(){
     if (external_robot_state) {
-        ROS_WARN("Subscribing to external joint state");
-        joint_state_sub = nh->subscribe(topic_root+"/sensing/external_joint_states", 1, &Robot::JointState, this);
+        RCLCPP_WARN(rclcpp::get_logger(),"Subscribing to external joint state");
+        joint_state_sub = node_->create_subscription<sensor_msgs::JointStateConstPtr>(
+            topic_root + "/sensing/external_joint_states", 
+            1, 
+            std::bind(&Robot::JointState, this, std::placeholders::_1));
     }
-    joint_target_sub = nh->subscribe(topic_root+"control/joint_targets", 100, &Robot::JointTarget, this);
-    controller_type_sub = nh->subscribe("/controller_type", 100, &Robot::controllerType, this);
-    freeze_srv = nh->advertiseService(topic_root+"control/freeze", &Robot::FreezeService, this);
-    zero_joints_sub = nh->subscribe(topic_root+"control/zero_joints", 1, &Robot::ZeroJoints,this);
+    joint_target_sub = node_->create_subscription<sensor_msgs::JointStateConstPtr>(
+        topic_root + "control/joint_targets", 
+        100, 
+        std::bind(&Robot::JointTarget, this, std::placeholders::_1));
+
+    controller_type_sub = node_->create_subscription<roboy_simulation_msgs::ControllerTypeConstPtr>(
+        "/controller_type", 
+        100, 
+        std::bind(&Robot::controllerType, this, std::placeholders::_1));
+
+    freeze_srv = node_->create_service<std_srvs::srv::Trigger>(
+        topic_root + "control/freeze", 
+        std::bind(&Robot::FreezeService, this, std::placeholders::_1, std::placeholders::_2));
+
+    zero_joints_sub = node_->create_subscription<roboy_control_msgs::StringsPtr>(
+        topic_root + "control/zero_joints", 
+        1, 
+        std::bind(&Robot::ZeroJoints, this, std::placeholders::_1));
 }
 
 void Robot::init(string urdf_file_path, string viapoints_file_path, vector<string> joint_names_ordered) {
 
     updatePublishers();
     fmt = Eigen::IOFormat(4, 0, " ", ";\n", "", "", "[", "]");
-    nh->getParam("external_robot_target", external_robot_target);
-    nh->getParam("external_robot_state", external_robot_state);
+    node_->get_parameter("external_robot_target", external_robot_target);
+    node_->get_parameter("external_robot_state", external_robot_state);
 
-    nh->getParam("link_relation_names", kinematics.link_relation_name);
+    node_->get_parameter("link_relation_names", kinematics.link_relation_name);
     for (string lr:kinematics.link_relation_name) {
-        ROS_INFO_STREAM(lr);
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),lr);
         vector<string> joint_names;
-        nh->getParam(("link_relation/" + lr + "/joint_names"), joint_names);
+        node_->get_parameter(("link_relation/" + lr + "/joint_names"), joint_names);
         kinematics.joint_relation_name.push_back(joint_names);
     }
 
@@ -105,18 +117,18 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
     param_kp.resize(kinematics.number_of_dofs);
     param_kd.resize(kinematics.number_of_dofs);
 
-    nh->getParam("joint_dt", kinematics.joint_dt);
-    nh->getParam("joint_kp", param_kp);
-    nh->getParam("joint_kd", param_kd);
+    node_->get_parameter("joint_dt", kinematics.joint_dt);
+    node_->get_parameter("joint_kp", param_kp);
+    node_->get_parameter("joint_kd", param_kd);
     for (int joint = 0; joint < kinematics.number_of_dofs; joint++) {
         Kp_[joint] = param_kp[joint];
         Kd_[joint] = param_kd[joint];
-        ROS_INFO_STREAM(kinematics.joint_names[joint] << "\tdt=" << kinematics.joint_dt[joint] <<
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),kinematics.joint_names[joint] << "\tdt=" << kinematics.joint_dt[joint] <<
                         "\tkp=" << param_kp[joint] << "\tkd=" << param_kd[joint]);
     }
 
     for (int joint = 0; joint < kinematics.number_of_dofs; joint++) {
-        ROS_INFO("initializing controllers for joint %d %s", joint, kinematics.joint_names[joint].c_str());
+        RCLCPP_INFO(rclcpp::get_logger(),"initializing controllers for joint %d %s", joint, kinematics.joint_names[joint].c_str());
         // connect and register the cardsflow state interface
         hardware_interface::CardsflowStateHandle state_handle(kinematics.joint_names[joint], joint, &q[joint], &qd[joint],
                                                               &qdd[joint], &kinematics.L, &kinematics.M, &kinematics.CG
@@ -146,22 +158,22 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
 
     try {
         last_visualization =
-                ros::Time::now() - ros::Duration(10); // triggers immediate visualization in first iteratiom
+                 rclcpp::Clock().now() - rclcpp::Duration(10); // triggers immediate visualization in first iteratiom
     }
     catch(std::runtime_error& ex) {
-        ROS_ERROR("Exception: [%s]", ex.what());
+        RCLCPP_ERROR(rclcpp::get_logger(), "Exception: [%s]", ex.what());
     }
 
     int k=0;
-    nh->getParam("endeffectors", kinematics.endeffectors);
+    node_->get_parameter("endeffectors", kinematics.endeffectors);
     kinematics.endeffector_dof_offset.push_back(0);
     Ld.resize(kinematics.endeffectors.size());
     for (string ef:kinematics.endeffectors) {
-        ROS_INFO_STREAM("configuring endeffector " << ef);
+        RCLCPP_INFO_STREAM(rclcpp::get_logger(),"configuring endeffector " << ef);
         vector<string> ik_joints;
-        nh->getParam((ef + "/joints"), ik_joints);
+        node_->get_parameter((ef + "/joints"), ik_joints);
         if (ik_joints.empty()) {
-            ROS_WARN(
+            RCLCPP_WARN(rclcpp::get_logger(),
                     "endeffector %s has no joints defined, check your endeffector.yaml or parameter server.  skipping...",
                     ef.c_str());
             continue;
@@ -182,16 +194,16 @@ void Robot::init(string urdf_file_path, string viapoints_file_path, vector<strin
 void Robot::update(){
 
     if (debug_) {
-        if (nh->hasParam("joint_dt"))
-            nh->getParam("joint_dt", kinematics.joint_dt);
-        if (nh->hasParam("joint_kp")){
-            nh->getParam("joint_kp", param_kp);
+        if (node_->has_parameter("joint_dt"))
+            node_->get_parameter("joint_dt", kinematics.joint_dt);
+        if (node_->has_parameter("joint_kp")){
+            node_->get_parameter("joint_kp", param_kp);
             for (int joint = 0; joint < kinematics.number_of_dofs; joint++) {
                 Kp_[joint] = param_kp[joint];
             }
         }
-        if (nh->hasParam("joint_kd")) {
-            nh->getParam("joint_kd", param_kd);
+        if (node_->has_parameter("joint_kd")) {
+            node_->get_parameter("joint_kd", param_kd);
             for (int joint = 0; joint < kinematics.number_of_dofs; joint++) {
                 Kd_[joint] = param_kd[joint];
             }
@@ -246,11 +258,11 @@ void Robot::update(){
         kinematics.setRobotState(state_next[0], state_next[1]);
         kinematics.getRobotCableFromJoints(l_next);
     }
-    ROS_INFO_STREAM_THROTTLE(5, "q_target " << q_target.transpose().format(fmt));
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(5), "q_target " << q_target.transpose().format(fmt));
 }
 
 void Robot::publishViz(){
-    if ((1.0 / (ros::Time::now() - last_visualization).toSec()) < 30) {
+    if ((1.0 / (rclcpp::Clock().now() - last_visualization).toSec()) < 30) {
         { // tendon state publisher
             roboy_simulation_msgs::Tendon msg;
             VectorXd l;
@@ -263,8 +275,8 @@ void Robot::publishViz(){
                 msg.ld.push_back(Ld[0][i]); // TODO: only first endeffector Ld is send here
                 msg.number_of_viapoints.push_back(kinematics.cables[i].viaPoints.size());
                 for (auto vp:kinematics.cables[i].viaPoints) {
-                    geometry_msgs::Vector3 VP;
-                    tf::vectorEigenToMsg(vp->global_coordinates, VP);
+                    geometry_msgs::msg::Vector3 VP;
+                    tf2::toMsg(vp->global_coordinates, VP);
                     msg.viapoints.push_back(VP);
                 }
             }
@@ -274,9 +286,10 @@ void Robot::publishViz(){
             static int seq = 0;
             vector<Matrix4d> robot_poses = kinematics.getRobotPosesFromJoints();
             for (int i = 0; i < kinematics.number_of_links; i++) {
-                geometry_msgs::PoseStamped msg;
+                geometry_msgs::msg::PoseStamped msg;
+
                 msg.header.seq = seq++;
-                msg.header.stamp = ros::Time::now();
+                msg.header.stamp = rclcpp::Clock().now();
                 msg.header.frame_id = kinematics.link_names[i];
                 Isometry3d iso(robot_poses[i]);
                 tf::poseEigenToMsg(iso, msg.pose);
@@ -295,12 +308,13 @@ void Robot::publishViz(){
                 static int seq = 0;
                 for (int i = 0; i < kinematics.number_of_links; i++) {
 
-                    geometry_msgs::PoseStamped msg;
+                    geometry_msgs::msg::PoseStamped msg;
                     msg.header.seq = seq++;
-                    msg.header.stamp = ros::Time::now();
+                    msg.header.stamp = rclcpp::Clock().now();
                     msg.header.frame_id = kinematics.link_names[i];
                     Isometry3d iso(target_poses[i]);
-                    tf::poseEigenToMsg(iso, msg.pose);
+                    // tf::poseEigenToMsg(iso, msg.pose);
+                    tf2::toMsg(iso, msg.pose);
                     robot_state_target_pub.publish(msg);
                 }
 
@@ -308,11 +322,11 @@ void Robot::publishViz(){
             }
         }
         { // joint state publisher
-            sensor_msgs::JointState cf_msg;
+            sensor_msgs::msg::JointState cf_msg;
             roboy_simulation_msgs::JointState msg;
             msg.names = kinematics.joint_names;
             cf_msg.name = kinematics.joint_names;
-            cf_msg.header.stamp = ros::Time::now();
+            cf_msg.header.stamp = rclcpp::Clock().now();
 
             kinematics.setRobotState(q, qd);
 
@@ -340,7 +354,7 @@ void Robot::publishViz(){
     }
 }
 
-void Robot::JointTarget(const sensor_msgs::JointStateConstPtr &msg){
+void Robot::JointTarget(const sensor_msgs::msg::JointStateConstPtr &msg){
     int i = 0;
     if (msg->position.size() == msg->name.size())
     {
@@ -359,7 +373,8 @@ void Robot::JointTarget(const sensor_msgs::JointStateConstPtr &msg){
 //            ROS_WARN_STREAM(q_target(joint_index));
 //            qd_target(joint_index) = msg->velocity[i];
             } else {
-                ROS_WARN_THROTTLE(5.0, "joint %s not found in model", joint.c_str());
+                RCLCPP_WARN_THROTTLE(this->get_logger(), std::chrono::seconds(5), "joint %s not found in model", joint.c_str());
+
             }
             i++;
         }
@@ -367,8 +382,8 @@ void Robot::JointTarget(const sensor_msgs::JointStateConstPtr &msg){
 
 }
 
-void Robot::JointState(const sensor_msgs::JointStateConstPtr &msg) {
-    ROS_WARN_STREAM_THROTTLE(10,"external joint states sub");
+void Robot::JointState(const sensor_msgs::msg::JointStateConstPtr &msg) {
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), std::chrono::seconds(10),"external joint states sub");
     int i = 0;
     for (string joint:msg->name) {
         if (std::count(kinematics.joint_names.begin(), kinematics.joint_names.end(), joint)) {
@@ -377,7 +392,7 @@ void Robot::JointState(const sensor_msgs::JointStateConstPtr &msg) {
                 q(joint_index) = msg->position[i];
 //                qd(joint_index) = msg->velocity[i];
             } else {
-                ROS_ERROR("joint %s not found in model", joint.c_str());
+                RCLCPP_ERROR(rclcpp::get_logger(), "joint %s not found in model", joint.c_str());
             }
         }
         i++;
@@ -387,7 +402,7 @@ void Robot::JointState(const sensor_msgs::JointStateConstPtr &msg) {
 void Robot::controllerType(const roboy_simulation_msgs::ControllerTypeConstPtr &msg) {
     auto it = find(kinematics.joint_names.begin(), kinematics.joint_names.end(),msg->joint_name);
     if(it!=kinematics.joint_names.end()) {
-        ROS_INFO("%s changed controller to %s", msg->joint_name.c_str(),
+        RCLCPP_INFO(rclcpp::get_logger(),"%s changed controller to %s", msg->joint_name.c_str(),
                  (msg->type==CARDSflow::ControllerType::cable_length_controller?"cable_length_controller":
                   msg->type==CARDSflow::ControllerType::torque_position_controller?"torque_position_controller":
                   msg->type==CARDSflow::ControllerType::force_position_controller?"force_position_controller":"UNKNOWN"));
@@ -409,14 +424,14 @@ bool Robot::FreezeService(std_srvs::Trigger::Request &req,
 void Robot::ZeroJoints(const roboy_control_msgs::StringsPtr &msg) {
     //ROS_WARN(msg->names);
     if (msg->names.empty()) {
-        ROS_WARN_STREAM("Setting all joint targets to zero");
+        RCLCPP_WARN_STREAM(rclcpp::get_logger(),"Setting all joint targets to zero");
         //for (int i = 1; i < number_of_links; i++) {
         q_target.setZero();
         //}
     }
     else {
         for (string joint: msg->names) {
-            ROS_INFO_STREAM("zero " << joint);
+            RCLCPP_INFO_STREAM(rclcpp::get_logger(),"zero " << joint);
             int joint_index = kinematics.GetJointIdByName(joint);
             if (joint_index != iDynTree::JOINT_INVALID_INDEX) {
                 q_target(joint_index) = 0;
